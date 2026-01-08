@@ -5,7 +5,6 @@ WORKDIR /app
 
 #Install system dependencies (make + build tools + sqlite)
 RUN apt-get update && apt-get install -y \
-    gcc \
     sqlite3 \
     make \
     && rm -rf /var/lib/apt/lists/*
