@@ -1,12 +1,5 @@
 #Base image
 FROM python:3.10-slim
-
-#Environment variables
-#ENV PYTHONDONTWRITEBYTECODE=1
-#ENV PYTHONUNBUFFERED=1
-#ENV FLASK_APP=run.py
-#ENV FLASK_ENV=production
-
 #Set working directory
 WORKDIR /app
 
