@@ -36,7 +36,7 @@ jobs:
           pip install flake8 pytest
 
       - name: Build API
-        run: make up
+        run: make build-api
 
       - name: Run Tests
         run: make test
