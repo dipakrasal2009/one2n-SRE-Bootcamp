@@ -1,25 +1,84 @@
-# Student CRUD REST API (Flask)
+# Student REST API
 
-## Overview
-A simple REST API to create, read, update, delete students. Uses Flask, SQLAlchemy and Flask-Migrate.
+Simple REST API for managing students.
 
-## Setup
-1. python3 -m venv venv
-2. source venv/bin/activate
-3. pip install -r requirements.txt
-4. cp .env.example .env (edit DATABASE_URL if desired)
-5. FLASK_APP=run.py flask db init
-6. FLASK_APP=run.py flask db migrate -m "create students table"
-7. FLASK_APP=run.py flask db upgrade
-8. python run.py
+## Endpoints
 
-## API Endpoints
-- POST /api/v1/students/  (create)
-- GET /api/v1/students/   (list)
-- GET /api/v1/students/<id> (get)
-- PUT /api/v1/students/<id> (update)
-- DELETE /api/v1/students/<id> (delete)
-- GET /healthcheck
+- `GET /api/v1/student`
+- `POST /api/v1/student`
+- `GET /api/v1/student/<id>`
+- `PUT /api/v1/student/<id>`
+- `DELETE /api/v1/student/<id>`
+- `GET /healthcheck`
 
-## Testing
-Run `pytest -q`
+## How to Run
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python run.py
+
+
+
+---
+
+### ✅ 11. Add Logging (optional but recommended)
+
+In `routes.py`, you can add logs like:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+
+# inside route
+logging.info("Student created: %s", new_student.name)
+
+# SRE_Bootcamp
+
+# Student API (Flask)
+
+## 🐳 Docker
+
+Build Docker Image:
+
+```bash
+make build
+
+Run the container with environment variables:
+```
+make run
+```
+Tag and push:
+```
+make tag-latest
+make push
+```
+🧪 Healthcheck
+```
+curl http://localhost:5000/healthcheck
+```
+
+🧬 Image Info
+Multi-stage build
+
+Small image size (~40MB)
+
+Tags: student-api:v1.0.0 (no latest tag)
+
+
+—
+
+✅ Summary
+
+You now have:
+
+- ✅ Multi-stage Dockerfile
+- ✅ Minimal image size
+- ✅ Environment variable support
+- ✅ SemVer tagging
+- ✅ Automated Makefile
+- ✅ Clean README instructions
+
+Let me know if you want to Docker Compose this or deploy to AWS/GCP next.
+

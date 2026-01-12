@@ -17,4 +17,4 @@ pytest-flask
 
 # Optional: Migrations (if using Flask-Migrate or Alembic)
 flask-migrate
-
+psycopg2-binary
