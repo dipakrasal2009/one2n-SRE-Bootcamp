@@ -13,7 +13,7 @@ Vagrant.configure("2") do |config|
   # Every Vagrant development environment requires a box. You can search for
   # boxes at https://vagrantcloud.com/search.
   config.vm.box = "roboxes/ubuntu2204"
-  config.vm.network "forwarded_port", guest: 7070, host: 7070  # Expose Nginx
+  config.vm.network "forwarded_port", guest: 5001, host: 7070  # Expose Nginx
   config.vm.network "forwarded_port", guest: 5432, host: 5432  # Optional: Expose DB
   
   config.vm.provider "virtualbox" do |vb|
