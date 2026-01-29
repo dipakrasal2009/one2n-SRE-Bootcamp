@@ -1,0 +1,242 @@
+Here are the minimal Vault CLI commands you can run (for a simple KV v2 at secret/ as in your manifests):
+# 1) Port-forward Vault (run this in a separate terminal)kubectl -n vault port-forward svc/vault 8200:8200
+# 2) In another terminal, configure Vault CLI (use your real root/token)export VAULT_ADDR='http://127.0.0.1:8200'export VAULT_TOKEN='<YOUR_VAULT_TOKEN>'
+# 3) Create/update the db-credentials secret in Vaultvault kv put secret/db-credentials \  username=user \  password=password
+This will create the secret/db-credentials entry with fields username and password that your ExternalSecret is expecting.
+bash (905-1024)
+ 
+
+# 1) Check why External Secrets Operator is crashingkubectl -n external-secrets logs deployment/external-secrets# 2) Also confirm the main CRDs existkubectl get crd | egrep 'externalsecrets\.external-secrets\.io|secretstores\.external-secrets\.io'# 3) If CRDs are missing, reinstall them via Helm (once, cleanly)helm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace --set installCRDs=true
+bash (24-1023)
+ 
+
+# Check External Secrets Operator healthkubectl -n external-secrets get podskubectl -n external-secrets logs deployment/external-secrets# Verify CRDs needed for SecretStore/ExternalSecretkubectl get crd | egrep 'externalsecrets\.external-secrets\.io|secretstores\.external-secrets\.io'# Check that DB + API are now runningkubectl -n student-api get podskubectl -n student-api get svc student-api# Test the API once student-api pod is Running (replace <node-ip> and <nodePort>)curl "http://<node-ip>:<nodePort>/api/v1/student"
+yes all done 
+
+
+
+pls give me the all steps that i can run in another system
+
+
+
+give me all commands and what i have change and which file 
+
+
+
+and also give me the shell script of commands 
+
+1. Prerequisites on the new system
+Tools: kubectl, helm, vault CLI (optional but recommended).
+Cluster: Running Kubernetes cluster, kubectl context set.
+Images: dipakrasal2009/sre_bootcamp-api1:v27 and postgres:15 must be pullable from the cluster.
+Repo: Clone your repo and cd into it:
+git clone <your-repo-url> SRE_Bootcamp3cd SRE_Bootcamp3
+2. Files involved (no changes needed if you keep same images/creds)
+Vault + ESO:
+k8s-manifests/vault/vault.yml
+k8s-manifests/final/vault-secretstore.yaml
+k8s-manifests/final/external-secret-db.yaml
+k8s-manifests/root_token.txt (Vault root token used for vault-token Secret)
+Database:
+k8s-manifests/final/database.yml
+Application:
+k8s-manifests/final/application.yml
+Only change these if:
+You want different image tags → update image: in application.yml and database.yml.
+You want different DB username/password → update Vault secret (step 4) and keep db-credentials keys username/password.
+3. Step-by-step commands to deploy everything
+Run all of these from inside SRE_Bootcamp3:
+# 0) (optional) Label nodes so app and DB land on correct nodeskubectl label node <app-node-name> type=applicationkubectl label node <db-node-name> type=dependent_services
+# 1) Install External Secrets Operator (CRDs + controller) via Helmhelm repo add external-secrets https://charts.external-secrets.iohelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true
+# 2) Deploy Vault (namespace + Deployment + Service)kubectl apply -f k8s-manifests/vault/vault.yml
+# 3) Create Kubernetes secret with Vault token for ESO#    Use the token from k8s-manifests/root_token.txt (or your own)VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"
+# 4) Configure SecretStore pointing ESO to Vaultkubectl apply -f k8s-manifests/final/vault-secretstore.yaml
+# 5) Configure ExternalSecret to sync DB credentials from Vault -> K8s Secret db-credentialskubectl apply -f k8s-manifests/final/external-secret-db.yaml
+# 6) Put DB credentials into Vault (KV v2 at path secret/db-credentials)#    First, port-forward Vault (run in a separate terminal):kubectl -n vault port-forward svc/vault 8200:8200
+# 6b) In your main terminal, configure Vault CLI and write the secretexport VAULT_ADDR='http://127.0.0.1:8200'export VAULT_TOKEN="$VAULT_TOKEN_VALUE"vault kv put secret/db-credentials \  username=user \  password=password
+# 7) Deploy Postgres (namespace + ConfigMap + Deployment + Service)kubectl apply -f k8s-manifests/final/database.yml
+# 8) Deploy Student API (namespace + ConfigMap + Deployment with initContainer + Service)kubectl apply -f k8s-manifests/final/application.yml
+# 9) Wait for pods to be readykubectl -n student-api get pods -w
+# 10) Get NodePort and test the APIkubectl -n student-api get svc student-api# Replace <node-ip> and <nodePort> with real values from the service output:curl "http://<node-ip>:<nodePort>/api/v1/student"
+4. Simple deployment shell script
+Create a file deploy_student_api.sh in the repo root with:
+#!/usr/bin/env bashset -euo pipefail# ==== Config ====APP_NODE="<app-node-name>"DB_NODE="<db-node-name>"REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"cd "$REPO_ROOT"# ==== 0) Label nodes (idempotent) ====kubectl label node "$APP_NODE" type=application --overwritekubectl label node "$DB_NODE" type=dependent_services --overwrite# ==== 1) Install ESO (CRDs + controller) ====helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || truehelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true# ==== 2) Deploy Vault ====kubectl apply -f k8s-manifests/vault/vault.yml# ==== 3) Create vault-token secret in external-secrets ns ====VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets delete secret vault-token --ignore-not-foundkubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"# ==== 4) SecretStore + ExternalSecret ====kubectl apply -f k8s-manifests/final/vault-secretstore.yamlkubectl apply -f k8s-manifests/final/external-secret-db.yaml# ==== 5) (Manual step) Ensure Vault has the db-credentials secret ====echo "Now run this in another terminal to write DB creds into Vault:"echo "  kubectl -n vault port-forward svc/vault 8200:8200"echo "  export VAULT_ADDR='http://127.0.0.1:8200'"echo "  export VAULT_TOKEN='$VAULT_TOKEN_VALUE'"echo "  vault kv put secret/db-credentials username=user password=password"read -p "Press ENTER after you have written the Vault secret..."# ==== 6) Deploy DB and API ====kubectl apply -f k8s-manifests/final/database.ymlkubectl apply -f k8s-manifests/final/application.ymlecho "Waiting for pods in namespace student-api..."kubectl -n student-api wait --for=condition=available deployment/postgres --timeout=300skubectl -n student-api wait --for=condition=available deployment/student-api --timeout=300secho "Student API deployed. Get service info with:"echo "  kubectl -n student-api get svc student-api"
+Then on a new system:
+chmod +x deploy_student_api.sh./deploy_student_api.sh
+This reproduces the full setup (Vault, ESO, ExternalSecret, Postgres, API) with the same credentials and manifest behavior you have now.
+
+
+==============================
+Student API – K8s Deployment Guide
+==============================
+
+1. Prerequisites on the new system
+----------------------------------
+- Tools:
+  - kubectl
+  - helm
+  - vault CLI (optional but recommended)
+- Cluster:
+  - Running Kubernetes cluster
+  - kubectl context pointing to the cluster
+- Images:
+  - dipakrasal2009/sre_bootcamp-api1:v27
+  - postgres:15
+- Repository:
+  - Clone and change directory:
+
+    git clone <your-repo-url> SRE_Bootcamp3
+    cd SRE_Bootcamp3
+
+2. Files involved
+-----------------
+- Vault + External Secrets Operator (ESO):
+  - k8s-manifests/vault/vault.yml
+  - k8s-manifests/final/vault-secretstore.yaml
+  - k8s-manifests/final/external-secret-db.yaml
+  - k8s-manifests/root_token.txt        # Vault token used to create vault-token Secret
+- Database (Postgres):
+  - k8s-manifests/final/database.yml
+- Application (Student API):
+  - k8s-manifests/final/application.yml
+
+When to change files:
+- To use different image tags:
+  - Edit image: in:
+    - k8s-manifests/final/application.yml
+    - k8s-manifests/final/database.yml
+- To use different DB credentials:
+  - Change values when writing Vault secret (step 3.6) but keep keys:
+    - username
+    - password
+
+3. Step-by-step commands to deploy everything
+---------------------------------------------
+Run all of the following from inside the repo root: SRE_Bootcamp3
+
+3.0 (Optional) Label nodes so app and DB land on correct nodes
+kubectl label node <app-node-name> type=application
+kubectl label node <db-node-name> type=dependent_services
+
+3.1 Install External Secrets Operator (CRDs + controller) via Helm
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  -n external-secrets --create-namespace \
+  --set installCRDs=true
+
+3.2 Deploy Vault (namespace + Deployment + Service)
+kubectl apply -f k8s-manifests/vault/vault.yml
+
+3.3 Create Kubernetes Secret with Vault token for ESO
+# Use the token stored in k8s-manifests/root_token.txt (or your own)
+VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')
+kubectl -n external-secrets create secret generic vault-token \
+  --from-literal=token="$VAULT_TOKEN_VALUE"
+
+3.4 Configure SecretStore pointing ESO to Vault
+kubectl apply -f k8s-manifests/final/vault-secretstore.yaml
+
+3.5 Configure ExternalSecret to sync DB credentials from Vault -> K8s Secret
+kubectl apply -f k8s-manifests/final/external-secret-db.yaml
+
+3.6 Put DB credentials into Vault (KV v2 at path secret/db-credentials)
+3.6.1 Port-forward Vault (run in a separate terminal):
+kubectl -n vault port-forward svc/vault 8200:8200
+
+3.6.2 In your main terminal, configure Vault CLI and write the secret:
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN="$VAULT_TOKEN_VALUE"
+vault kv put secret/db-credentials \
+  username=user \
+  password=password
+
+3.7 Deploy Postgres (namespace + ConfigMap + Deployment + Service)
+kubectl apply -f k8s-manifests/final/database.yml
+
+3.8 Deploy Student API (namespace + ConfigMap + Deployment + Service)
+kubectl apply -f k8s-manifests/final/application.yml
+
+3.9 Wait for pods to be ready
+kubectl -n student-api get pods -w
+
+3.10 Get NodePort and test the API
+kubectl -n student-api get svc student-api
+# Replace <node-ip> and <nodePort> with real values from the service output:
+curl "http://<node-ip>:<nodePort>/api/v1/student"
+
+4. Minimal Vault CLI snippet (for reference)
+--------------------------------------------
+# 1) Port-forward Vault (separate terminal)
+kubectl -n vault port-forward svc/vault 8200:8200
+
+# 2) Configure Vault CLI
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN='<YOUR_VAULT_TOKEN>'
+
+# 3) Create/update db-credentials secret in Vault (KV v2 at secret/)
+vault kv put secret/db-credentials \
+  username=user \
+  password=password
+
+5. Simple deployment shell script (deploy_student_api.sh)
+---------------------------------------------------------
+Place this file in the repo root (SRE_Bootcamp3/deploy_student_api.sh):
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==== Config ====
+APP_NODE="<app-node-name>"
+DB_NODE="<db-node-name>"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+
+# ==== 0) Label nodes (idempotent) ====
+kubectl label node "$APP_NODE" type=application --overwrite
+kubectl label node "$DB_NODE" type=dependent_services --overwrite
+
+# ==== 1) Install ESO (CRDs + controller) ====
+helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
+helm repo update
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  -n external-secrets --create-namespace \
+  --set installCRDs=true
+
+# ==== 2) Deploy Vault ====
+kubectl apply -f k8s-manifests/vault/vault.yml
+
+# ==== 3) Create vault-token secret in external-secrets ns ====
+VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')
+kubectl -n external-secrets delete secret vault-token --ignore-not-found
+kubectl -n external-secrets create secret generic vault-token \
+  --from-literal=token="$VAULT_TOKEN_VALUE"
+
+# ==== 4) SecretStore + ExternalSecret ====
+kubectl apply -f k8s-manifests/final/vault-secretstore.yaml
+kubectl apply -f k8s-manifests/final/external-secret-db.yaml
+
+# ==== 5) (Manual step) Ensure Vault has the db-credentials secret ====
+echo "Now run this in another terminal to write DB creds into Vault:"
+echo "  kubectl -n vault port-forward svc/vault 8200:8200"
+echo "  export VAULT_ADDR='http://127.0.0.1:8200'"
+echo "  export VAULT_TOKEN='$VAULT_TOKEN_VALUE'"
+echo "  vault kv put secret/db-credentials username=user password=password"
+read -p "Press ENTER after you have written the Vault secret..."
+
+# ==== 6) Deploy DB and API ====
+kubectl apply -f k8s-manifests/final/database.yml
+kubectl apply -f k8s-manifests/final/application.yml
+
+echo "Waiting for pods in namespace student-api..."
+kubectl -n student-api wait --for=condition=available deployment/postgres --timeout=300s
+kubectl -n student-api wait --for=condition=available deployment/student-api --timeout=300s
+
+echo "Student API deployed. Get service info with:"
+echo "  kubectl -n student-api get svc student-api"
+
+6. Using the deployment script on another system
+------------------------------------------------
+chmod +x deploy_student_api.sh
+./deploy_student_api.sh

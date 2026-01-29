@@ -1,0 +1,592 @@
+Here are the minimal Vault CLI commands you can run (for a simple KV v2 at secret/ as in your manifests):
+# 1) Port-forward Vault (run this in a separate terminal)kubectl -n vault port-forward svc/vault 8200:8200
+# 2) In another terminal, configure Vault CLI (use your real root/token)export VAULT_ADDR='http://127.0.0.1:8200'export VAULT_TOKEN='<YOUR_VAULT_TOKEN>'
+# 3) Create/update the db-credentials secret in Vaultvault kv put secret/db-credentials \  username=user \  password=password
+This will create the secret/db-credentials entry with fields username and password that your ExternalSecret is expecting.
+bash (905-1024)
+ 
+
+# 1) Check why External Secrets Operator is crashingkubectl -n external-secrets logs deployment/external-secrets# 2) Also confirm the main CRDs existkubectl get crd | egrep 'externalsecrets\.external-secrets\.io|secretstores\.external-secrets\.io'# 3) If CRDs are missing, reinstall them via Helm (once, cleanly)helm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace --set installCRDs=true
+bash (24-1023)
+ 
+
+# Check External Secrets Operator healthkubectl -n external-secrets get podskubectl -n external-secrets logs deployment/external-secrets# Verify CRDs needed for SecretStore/ExternalSecretkubectl get crd | egrep 'externalsecrets\.external-secrets\.io|secretstores\.external-secrets\.io'# Check that DB + API are now runningkubectl -n student-api get podskubectl -n student-api get svc student-api# Test the API once student-api pod is Running (replace <node-ip> and <nodePort>)curl "http://<node-ip>:<nodePort>/api/v1/student"
+yes all done 
+
+
+
+pls give me the all steps that i can run in another system
+
+
+
+give me all commands and what i have change and which file 
+
+
+
+and also give me the shell script of commands 
+
+1. Prerequisites on the new system
+Tools: kubectl, helm, vault CLI (optional but recommended).
+Cluster: Running Kubernetes cluster, kubectl context set.
+Images: dipakrasal2009/sre_bootcamp-api1:v27 and postgres:15 must be pullable from the cluster.
+Repo: Clone your repo and cd into it:
+git clone <your-repo-url> SRE_Bootcamp3cd SRE_Bootcamp3
+2. Files involved (no changes needed if you keep same images/creds)
+Vault + ESO:
+k8s-manifests/vault/vault.yml
+k8s-manifests/final/vault-secretstore.yaml
+k8s-manifests/final/external-secret-db.yaml
+k8s-manifests/root_token.txt (Vault root token used for vault-token Secret)
+Database:
+k8s-manifests/final/database.yml
+Application:
+k8s-manifests/final/application.yml
+Only change these if:
+You want different image tags → update image: in application.yml and database.yml.
+You want different DB username/password → update Vault secret (step 4) and keep db-credentials keys username/password.
+3. Step-by-step commands to deploy everything
+Run all of these from inside SRE_Bootcamp3:
+# 0) (optional) Label nodes so app and DB land on correct nodeskubectl label node <app-node-name> type=applicationkubectl label node <db-node-name> type=dependent_services
+# 1) Install External Secrets Operator (CRDs + controller) via Helmhelm repo add external-secrets https://charts.external-secrets.iohelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true
+# 2) Deploy Vault (namespace + Deployment + Service)kubectl apply -f k8s-manifests/vault/vault.yml
+# 3) Create Kubernetes secret with Vault token for ESO#    Use the token from k8s-manifests/root_token.txt (or your own)VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"
+# 4) Configure SecretStore pointing ESO to Vaultkubectl apply -f k8s-manifests/final/vault-secretstore.yaml
+# 5) Configure ExternalSecret to sync DB credentials from Vault -> K8s Secret db-credentialskubectl apply -f k8s-manifests/final/external-secret-db.yaml
+# 6) Put DB credentials into Vault (KV v2 at path secret/db-credentials)#    First, port-forward Vault (run in a separate terminal):kubectl -n vault port-forward svc/vault 8200:8200
+# 6b) In your main terminal, configure Vault CLI and write the secretexport VAULT_ADDR='http://127.0.0.1:8200'export VAULT_TOKEN="$VAULT_TOKEN_VALUE"vault kv put secret/db-credentials \  username=user \  password=password
+# 7) Deploy Postgres (namespace + ConfigMap + Deployment + Service)kubectl apply -f k8s-manifests/final/database.yml
+# 8) Deploy Student API (namespace + ConfigMap + Deployment with initContainer + Service)kubectl apply -f k8s-manifests/final/application.yml
+# 9) Wait for pods to be readykubectl -n student-api get pods -w
+# 10) Get NodePort and test the APIkubectl -n student-api get svc student-api# Replace <node-ip> and <nodePort> with real values from the service output:curl "http://<node-ip>:<nodePort>/api/v1/student"
+4. Simple deployment shell script
+Create a file deploy_student_api.sh in the repo root with:
+#!/usr/bin/env bashset -euo pipefail# ==== Config ====APP_NODE="<app-node-name>"DB_NODE="<db-node-name>"REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"cd "$REPO_ROOT"# ==== 0) Label nodes (idempotent) ====kubectl label node "$APP_NODE" type=application --overwritekubectl label node "$DB_NODE" type=dependent_services --overwrite# ==== 1) Install ESO (CRDs + controller) ====helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || truehelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true# ==== 2) Deploy Vault ====kubectl apply -f k8s-manifests/vault/vault.yml# ==== 3) Create vault-token secret in external-secrets ns ====VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets delete secret vault-token --ignore-not-foundkubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"# ==== 4) SecretStore + ExternalSecret ====kubectl apply -f k8s-manifests/final/vault-secretstore.yamlkubectl apply -f k8s-manifests/final/external-secret-db.yaml# ==== 5) (Manual step) Ensure Vault has the db-credentials secret ====echo "Now run this in another terminal to write DB creds into Vault:"echo "  kubectl -n vault port-forward svc/vault 8200:8200"echo "  export VAULT_ADDR='http://127.0.0.1:8200'"echo "  export VAULT_TOKEN='$VAULT_TOKEN_VALUE'"echo "  vault kv put secret/db-credentials username=user password=password"read -p "Press ENTER after you have written the Vault secret..."# ==== 6) Deploy DB and API ====kubectl apply -f k8s-manifests/final/database.ymlkubectl apply -f k8s-manifests/final/application.ymlecho "Waiting for pods in namespace student-api..."kubectl -n student-api wait --for=condition=available deployment/postgres --timeout=300skubectl -n student-api wait --for=condition=available deployment/student-api --timeout=300secho "Student API deployed. Get service info with:"echo "  kubectl -n student-api get svc student-api"
+Then on a new system:
+chmod +x deploy_student_api.sh./deploy_student_api.sh
+This reproduces the full setup (Vault, ESO, ExternalSecret, Postgres, API) with the same credentials and manifest behavior you have now.
+
+
+==============================
+Student API – K8s Deployment Guide
+==============================
+
+1. Prerequisites on the new system
+----------------------------------
+- Tools:
+  - kubectl
+  - helm
+  - vault CLI (optional but recommended)
+- Cluster:
+  - Running Kubernetes cluster
+  - kubectl context pointing to the cluster
+- Images:
+  - dipakrasal2009/sre_bootcamp-api1:v27
+  - postgres:15
+- Repository:
+  - Clone and change directory:
+
+    git clone <your-repo-url> SRE_Bootcamp3
+    cd SRE_Bootcamp3
+
+2. Files involved
+-----------------
+- Vault + External Secrets Operator (ESO):
+  - k8s-manifests/vault/vault.yml
+  - k8s-manifests/final/vault-secretstore.yaml
+  - k8s-manifests/final/external-secret-db.yaml
+  - k8s-manifests/root_token.txt        # Vault token used to create vault-token Secret
+- Database (Postgres):
+  - k8s-manifests/final/database.yml
+- Application (Student API):
+  - k8s-manifests/final/application.yml
+
+When to change files:
+- To use different image tags:
+  - Edit image: in:
+    - k8s-manifests/final/application.yml
+    - k8s-manifests/final/database.yml
+- To use different DB credentials:
+  - Change values when writing Vault secret (step 3.6) but keep keys:
+    - username
+    - password
+
+3. Step-by-step commands to deploy everything
+---------------------------------------------
+Run all of the following from inside the repo root: SRE_Bootcamp3
+
+3.0 (Optional) Label nodes so app and DB land on correct nodes
+kubectl label node <app-node-name> type=application
+kubectl label node <db-node-name> type=dependent_services
+
+3.1 Install External Secrets Operator (CRDs + controller) via Helm
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  -n external-secrets --create-namespace \
+  --set installCRDs=true
+
+3.2 Deploy Vault (namespace + Deployment + Service)
+kubectl apply -f k8s-manifests/vault/vault.yml
+
+3.3 Create Kubernetes Secret with Vault token for ESO
+# Use the token stored in k8s-manifests/root_token.txt (or your own)
+VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')
+kubectl -n external-secrets create secret generic vault-token \
+  --from-literal=token="$VAULT_TOKEN_VALUE"
+
+3.4 Configure SecretStore pointing ESO to Vault
+kubectl apply -f k8s-manifests/final/vault-secretstore.yaml
+
+3.5 Configure ExternalSecret to sync DB credentials from Vault -> K8s Secret
+kubectl apply -f k8s-manifests/final/external-secret-db.yaml
+
+3.6 Put DB credentials into Vault (KV v2 at path secret/db-credentials)
+3.6.1 Port-forward Vault (run in a separate terminal):
+kubectl -n vault port-forward svc/vault 8200:8200
+
+3.6.2 In your main terminal, configure Vault CLI and write the secret:
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN="$VAULT_TOKEN_VALUE"
+vault kv put secret/db-credentials \
+  username=user \
+  password=password
+
+3.7 Deploy Postgres (namespace + ConfigMap + Deployment + Service)
+kubectl apply -f k8s-manifests/final/database.yml
+
+3.8 Deploy Student API (namespace + ConfigMap + Deployment + Service)
+kubectl apply -f k8s-manifests/final/application.yml
+
+3.9 Wait for pods to be ready
+kubectl -n student-api get pods -w
+
+3.10 Get NodePort and test the API
+kubectl -n student-api get svc student-api
+# Replace <node-ip> and <nodePort> with real values from the service output:
+curl "http://<node-ip>:<nodePort>/api/v1/student"
+
+4. Minimal Vault CLI snippet (for reference)
+--------------------------------------------
+# 1) Port-forward Vault (separate terminal)
+kubectl -n vault port-forward svc/vault 8200:8200
+
+# 2) Configure Vault CLI
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN='<YOUR_VAULT_TOKEN>'
+
+# 3) Create/update db-credentials secret in Vault (KV v2 at secret/)
+vault kv put secret/db-credentials \
+  username=user \
+  password=password
+
+5. Simple deployment shell script (deploy_student_api.sh)
+---------------------------------------------------------
+Place this file in the repo root (SRE_Bootcamp3/deploy_student_api.sh):
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ==== Config ====
+APP_NODE="<app-node-name>"
+DB_NODE="<db-node-name>"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_ROOT"
+
+# ==== 0) Label nodes (idempotent) ====
+kubectl label node "$APP_NODE" type=application --overwrite
+kubectl label node "$DB_NODE" type=dependent_services --overwrite
+
+# ==== 1) Install ESO (CRDs + controller) ====
+helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
+helm repo update
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  -n external-secrets --create-namespace \
+  --set installCRDs=true
+
+# ==== 2) Deploy Vault ====
+kubectl apply -f k8s-manifests/vault/vault.yml
+
+# ==== 3) Create vault-token secret in external-secrets ns ====
+VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')
+kubectl -n external-secrets delete secret vault-token --ignore-not-found
+kubectl -n external-secrets create secret generic vault-token \
+  --from-literal=token="$VAULT_TOKEN_VALUE"
+
+# ==== 4) SecretStore + ExternalSecret ====
+kubectl apply -f k8s-manifests/final/vault-secretstore.yaml
+kubectl apply -f k8s-manifests/final/external-secret-db.yaml
+
+# ==== 5) (Manual step) Ensure Vault has the db-credentials secret ====
+echo "Now run this in another terminal to write DB creds into Vault:"
+echo "  kubectl -n vault port-forward svc/vault 8200:8200"
+echo "  export VAULT_ADDR='http://127.0.0.1:8200'"
+echo "  export VAULT_TOKEN='$VAULT_TOKEN_VALUE'"
+echo "  vault kv put secret/db-credentials username=user password=password"
+read -p "Press ENTER after you have written the Vault secret..."
+
+# ==== 6) Deploy DB and API ====
+kubectl apply -f k8s-manifests/final/database.yml
+kubectl apply -f k8s-manifests/final/application.yml
+
+echo "Waiting for pods in namespace student-api..."
+kubectl -n student-api wait --for=condition=available deployment/postgres --timeout=300s
+kubectl -n student-api wait --for=condition=available deployment/student-api --timeout=300s
+
+echo "Student API deployed. Get service info with:"
+echo "  kubectl -n student-api get svc student-api"
+
+6. Using the deployment script on another system
+------------------------------------------------
+chmod +x deploy_student_api.sh
+./deploy_student_api.sh
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Overview
+To solve this Helm milestone, you’ll basically convert your current manifest-based stack into Helm charts, then drive all deployments via Helm instead of kubectl apply.
+Here’s what you need to do, step by step.
+1. Decide chart structure
+Use a helm mono-repo layout under a new helm/ directory:
+Umbrella chart (top-level):
+helm/student-stack/
+Chart.yaml
+values.yaml
+charts/ (subcharts live here or as dependencies)
+Subcharts:
+helm/student-api/ – your REST API
+helm/postgres/ – your DB (either custom chart from your K8s manifests or dependency on Bitnami/Postgres)
+helm/vault/ – Vault (optional custom wrapper around hashicorp/vault chart, or simple copy of your current manifest logic)
+(optionally) helm/external-secrets/ – or just install ESO via Helm repo as you do now.
+For the assignment, it’s acceptable if:
+You have at least one custom chart for the API.
+You either vendor community charts for DB/Vault into helm/ or reference them as dependencies in Chart.yaml.
+2. Scaffold charts
+From repo root:
+mkdir -p helmcd helmhelm create student-api        # REST API charthelm create student-db         # You can model this after your postgres Deployment+Servicehelm create student-stack      # Umbrella chart
+Then remove boilerplate templates (ingress, hpa, serviceaccount, etc.) you don’t need and replace with your real manifests.
+3. Port your existing manifests into Helm templates
+Use the K8s you already have as source of truth:
+k8s-manifests/final/application.yml → helm/student-api/templates/:
+namespace.yaml (or use .Release.Namespace instead)
+configmap.yaml
+deployment.yaml (with initContainer and envFrom)
+service.yaml
+k8s-manifests/final/database.yml → helm/student-db/templates/:
+configmap.yaml
+deployment.yaml
+service.yaml
+k8s-manifests/vault/vault.yml → helm/vault/templates/:
+namespace.yaml
+deployment.yaml
+service.yaml
+k8s-manifests/final/vault-secretstore.yaml and external-secret-db.yaml:
+Either into student-stack or a small external-secrets chart.
+Parameterize in values.yaml:
+Images and tags (image.repository, image.tag)
+DB name, user, host, port
+Node selectors (type=application, type=dependent_services)
+Service type/ports (NodePort vs ClusterIP, nodePort number)
+Use Helm templates:
+image: {{ .Values.image.repository }}:{{ .Values.image.tag }}nodeSelector:  type: {{ .Values.nodeSelectorType }}
+4. Wire charts together (umbrella)
+In helm/student-stack/Chart.yaml:
+Declare dependencies on your subcharts:
+dependencies:  - name: student-api    version: 0.1.0    repository: "file://../student-api"  - name: student-db    version: 0.1.0    repository: "file://../student-db"  - name: vault    version: 0.1.0    repository: "file://../vault"
+You can also add external charts (e.g. Bitnami Postgres) instead of student-db.
+In helm/student-stack/values.yaml, set values for each subchart, e.g.:
+student-api:  image:    repository: dipakrasal2009/sre_bootcamp-api1    tag: v27  nodeSelectorType: applicationstudent-db:  image:    repository: postgres    tag: "15"  nodeSelectorType: dependent_services  db:    name: studentdbvault:  # any custom values you need
+5. Handle secrets and ESO/Vault
+You already have working ESO/Vault manifests. For Helm:
+Option A (simpler for assignment):
+Keep ESO installation via helm install external-secrets ... as a pre-step.
+Add vault-secretstore and external-secret-db as templates in umbrella chart (so they deploy with stack).
+Option B:
+Create a tiny external-secrets chart under helm/ that installs:
+SecretStore for Vault
+ExternalSecret for db-credentials.
+Either way, don’t hardcode db-credentials username/password in Helm; they continue to come from Vault via ESO. The only Helm-managed secret is vault-token (you can choose to manage that by Helm or manually).
+6. Replace kubectl apply with Helm commands
+New deployment flow on a fresh cluster:
+cd helm# 1) Install ESO CRDs + controller (already from external-secrets repo)helm repo add external-secrets https://charts.external-secrets.iohelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true# 2) Deploy your umbrella chart (Vault + DB + API + ESO integration)helm dependency update student-stackhelm upgrade --install student-stack ./student-stack -n student-api --create-namespace
+Vault secret + db-credentials write is still done via vault kv put, as you have now.
+7. Update README
+Add a new section, e.g. “Deploy with Helm”:
+How to:
+Install ESO
+helm dependency update helm/student-stack
+helm upgrade --install student-stack helm/student-stack -n student-api --create-namespace
+How to configure via values.yaml:
+Override DB/user/password, images, service type, node selectors, etc.
+How to test:
+kubectl -n student-api get svc student-api
+curl http://<node-ip>:<nodePort>/api/v1/student
+8. Concrete next actions for you
+Create helm/ directory and run helm create for at least student-api and student-stack.
+Copy your existing application.yml and database.yml into templates/ for those charts and parameterize with .Values.
+Add vault and ESO/Vault integration templates to either subcharts or the umbrella chart.
+Test locally with helm template and then helm install instead of kubectl apply.
+Document the exact helm commands and values.yaml overrides in README.
+If you want, I can next generate a concrete helm/student-api chart structure and example deployment.yaml template based directly on your current application.yml.
+pls give me all commands step by Step-by-step that i run it and d the helm setup
+
+Here’s a pure command-focused, step-by-step sequence you can follow on a fresh system to set up and use Helm for this stack. Wherever manual editing is needed I’ll call it out clearly.
+A. One-time: scaffold Helm charts (run once in your repo)
+From repo root (/home/bhakare/Documents/SRE_Bootcamp3):
+# 1) Create helm directory and basic chartsmkdir -p helmcd helmhelm create student-apihelm create student-dbhelm create student-stack
+Now manual edits required (one time):
+helm/student-api – replace boilerplate templates with your API manifests:
+Use k8s-manifests/final/application.yml as source.
+Keep:
+ConfigMap (api-config)
+Deployment (with initContainer and envFrom)
+Service (NodePort).
+Parameterize image/tag, ports, nodeSelector via .Values.
+helm/student-db – replace boilerplate with your Postgres manifests:
+Use k8s-manifests/final/database.yml.
+Keep:
+ConfigMap (db-config)
+Deployment (postgres)
+Service (ClusterIP).
+Parameterize image/tag, DB name, nodeSelector.
+helm/student-stack – umbrella chart:
+In Chart.yaml add dependencies (pointing to local charts):
+    dependencies:      - name: student-api        version: 0.1.0        repository: "file://../student-api"      - name: student-db        version: 0.1.0        repository: "file://../student-db"
+In values.yaml wire values for subcharts:
+    student-api:      image:        repository: dipakrasal2009/sre_bootcamp-api1        tag: v27      nodeSelectorType: application    student-db:      image:        repository: postgres        tag: "15"      nodeSelectorType: dependent_services      db:        name: studentdb
+Add templates for:
+Vault (k8s-manifests/vault/vault.yml)
+SecretStore (k8s-manifests/final/vault-secretstore.yaml)
+ExternalSecret (k8s-manifests/final/external-secret-db.yaml)
+(Optionally) vault-token Secret if you want Helm to manage it.
+Once those edits are done, continue with commands below for each cluster.
+B. Per-cluster: install ESO, then deploy whole stack with Helm
+Run from repo root:
+cd /home/bhakare/Documents/SRE_Bootcamp3
+1) (Optional) Label nodes
+kubectl label node <app-node-name> type=application --overwritekubectl label node <db-node-name> type=dependent_services --overwrite
+2) Install External Secrets Operator (CRDs + controller)
+helm repo add external-secrets https://charts.external-secrets.iohelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true
+3) Ensure Vault root token file exists
+(You already have it, but on a new system copy it in the same path.)
+# root_token.txt should contain the Vault token in one linels k8s-manifests/root_token.txt
+4) Build umbrella chart dependencies
+cd helmhelm dependency update student-stackcd ..
+5) Create vault-token Secret for ESO
+VAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets delete secret vault-token --ignore-not-foundkubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"
+6) Install the full stack via Helm
+helm upgrade --install student-stack ./helm/student-stack \  -n student-api --create-namespace
+This should render and apply:
+Vault Deployment + Service
+SecretStore + ExternalSecret (Vault → db-credentials)
+Postgres Deployment + Service
+Student API Deployment + Service
+7) Add DB credentials into Vault
+Terminal 1 (port-forward Vault):
+kubectl -n vault port-forward svc/vault 8200:8200
+Terminal 2:
+export VAULT_ADDR='http://127.0.0.1:8200'export VAULT_TOKEN="$VAULT_TOKEN_VALUE"vault kv put secret/db-credentials \  username=user \  password=password
+(If you change user/password here, make sure your app’s Config / connection string matches.)
+8) Wait for pods to become Ready
+kubectl -n student-api get pods -w
+9) Test the API
+kubectl -n student-api get svc student-api# Note the NodePort, then from your machine:curl "http://<node-ip>:<nodePort>/api/v1/student"
+C. Optional: single deployment script
+Create deploy_student_stack_helm.sh in repo root with:
+#!/usr/bin/env bashset -euo pipefailAPP_NODE="<app-node-name>"DB_NODE="<db-node-name>"REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"cd "$REPO_ROOT"kubectl label node "$APP_NODE" type=application --overwritekubectl label node "$DB_NODE" type=dependent_services --overwritehelm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || truehelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=trueVAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets delete secret vault-token --ignore-not-foundkubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"cd helmhelm dependency update student-stackcd ..helm upgrade --install student-stack ./helm/student-stack \  -n student-api --create-namespaceecho "Now, in another terminal, run:"echo "  kubectl -n vault port-forward svc/vault 8200:8200"echo "Then back here:"echo "  export VAULT_ADDR='http://127.0.0.1:8200'"echo "  export VAULT_TOKEN='$VAULT_TOKEN_VALUE'"echo "  vault kv put secret/db-credentials username=user password=password"read -p "Press ENTER after writing the Vault secret..."kubectl -n student-api get pods -w
+Then:
+chmod +x deploy_student_stack_helm.sh./deploy_student_stack_helm.sh
+This is everything you need on a new system once your charts are created.
+i want to do it using the helm why you give me shell script
+
+Got it, let’s keep it pure Helm + kubectl commands, no shell script.
+Below is the minimal, ordered command list you need on a new system, assuming you’ve already created and edited these charts:
+helm/student-api – templates based on k8s-manifests/final/application.yml
+helm/student-db – templates based on k8s-manifests/final/database.yml
+helm/student-stack – umbrella chart with dependencies on student-api, student-db, and templates for Vault + SecretStore + ExternalSecret
+If you haven’t created those charts yet, start at step 0; otherwise start at step 2.
+0. (One time) Create chart skeletons
+From repo root (/home/bhakare/Documents/SRE_Bootcamp3):
+mkdir -p helmcd helmhelm create student-apihelm create student-dbhelm create student-stackcd ..
+> After this, you manually replace the generated templates with your actual manifests and add dependencies in student-stack/Chart.yaml as discussed earlier.
+1. Label nodes (optional but matches your current setup)
+kubectl label node <app-node-name> type=application --overwritekubectl label node <db-node-name> type=dependent_services --overwrite
+2. Install External Secrets Operator via Helm
+helm repo add external-secrets https://charts.external-secrets.iohelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true
+3. Create vault-token Secret for ESO
+# from repo rootVAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets delete secret vault-token --ignore-not-foundkubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"
+4. Build umbrella chart dependencies
+cd helmhelm dependency update student-stackcd ..
+5. Install the whole stack via Helm
+helm upgrade --install student-stack ./helm/student-stack \  -n student-api --create-namespace
+> This should install:
+> - Vault (vault.yml templated into the chart)
+> - SecretStore + ExternalSecret (templated from your vault-secretstore + external-secret-db)
+> - Postgres (from student-db chart)
+> - Student API (from student-api chart)
+6. Add DB credentials into Vault (so ESO can sync them)
+Terminal 1:
+kubectl -n vault port-forward svc/vault 8200:8200
+Terminal 2:
+export VAULT_ADDR='http://127.0.0.1:8200'export VAULT_TOKEN="$VAULT_TOKEN_VALUE"vault kv put secret/db-credentials \  username=user \  password=password
+7. Check Helm releases and pods
+helm list -Akubectl -n student-api get podskubectl -n student-api get svc student-api
+8. Test the API
+# get nodePort from the service output abovecurl "http://<node-ip>:<nodePort>/api/v1/student"
+That’s the full Helm-based flow: one helm upgrade --install student-stack ... to deploy or update everything; only kubectl and vault are used for node labels, token secret, and writing DB credentials.
+if i want to do it using the helm init command 
+
+i want to setup the my own helm chart
+
+You’re on Helm 3, so there is no helm init anymore (that was for Tiller in Helm 2). To “init” your own charts now you use helm create and then replace the boilerplate with your manifests.
+Here’s how to set up your own Helm charts from scratch for this project.
+1. Scaffold charts from your repo root
+cd /home/bhakare/Documents/SRE_Bootcamp3mkdir -p helmcd helm# App charthelm create student-api# DB charthelm create student-db# Umbrella chart for the whole stackhelm create student-stackcd ..
+2. Turn student-api into your REST API chart
+From repo root:
+cd helm/student-apils templates
+Now edit:
+values.yaml – set defaults:
+image:  repository: dipakrasal2009/sre_bootcamp-api1  tag: v27service:  type: NodePort  port: 80  targetPort: 5050nodeSelector:  type: application
+templates/deployment.yaml – replace the generated deployment body with a templated version of your k8s-manifests/final/application.yml deployment:
+Use .Values.image.*, .Values.nodeSelector, etc., e.g.:
+containers:  - name: student-api    image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"    ports:      - containerPort: {{ .Values.service.targetPort }}    envFrom:      - secretRef:          name: db-credentials      - configMapRef:          name: api-config
+templates/service.yaml – adapt from your existing Service:
+spec:  type: {{ .Values.service.type }}  selector:    app: {{ include "student-api.fullname" . }}  ports:    - port: {{ .Values.service.port }}      targetPort: {{ .Values.service.targetPort }}
+templates/configmap.yaml – add from api-config in application.yml.
+Remove templates you don’t need (e.g. ingress.yaml, hpa.yaml, serviceaccount.yaml).
+3. Turn student-db into your Postgres chart
+cd ../student-db
+values.yaml:
+image:  repository: postgres  tag: "15"db:  name: studentdbnodeSelector:  type: dependent_services
+templates/deployment.yaml – base directly on k8s-manifests/final/database.yml deployment, but use values:
+containers:  - name: postgres    image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"    env:      - name: POSTGRES_USER        valueFrom:          secretKeyRef:            name: db-credentials            key: username      - name: POSTGRES_PASSWORD        valueFrom:          secretKeyRef:            name: db-credentials            key: password      - name: POSTGRES_DB        valueFrom:          configMapKeyRef:            name: db-config            key: POSTGRES_DB
+templates/configmap.yaml – from db-config in database.yml.
+templates/service.yaml – from postgres service.
+4. Configure the umbrella student-stack chart
+cd ../student-stack
+Chart.yaml – add local dependencies:
+dependencies:  - name: student-api    version: 0.1.0    repository: "file://../student-api"  - name: student-db    version: 0.1.0    repository: "file://../student-db"
+values.yaml – pass values into subcharts:
+student-api:  image:    repository: dipakrasal2009/sre_bootcamp-api1    tag: v27  service:    type: NodePort    port: 80    targetPort: 5050  nodeSelector:    type: applicationstudent-db:  image:    repository: postgres    tag: "15"  db:    name: studentdb  nodeSelector:    type: dependent_services
+templates/ – add YAMLs for:
+Vault (adapt k8s-manifests/vault/vault.yml)
+SecretStore (k8s-manifests/final/vault-secretstore.yaml)
+ExternalSecret (k8s-manifests/final/external-secret-db.yaml).
+5. Build and install your own Helm stack
+From repo root:
+cd /home/bhakare/Documents/SRE_Bootcamp3# Label nodes (optional)kubectl label node <app-node-name> type=application --overwritekubectl label node <db-node-name> type=dependent_services --overwrite# Install External Secrets Operator (from its own Helm repo)helm repo add external-secrets https://charts.external-secrets.iohelm repo updatehelm upgrade --install external-secrets external-secrets/external-secrets \  -n external-secrets --create-namespace \  --set installCRDs=true# Create vault-token secret for ESOVAULT_TOKEN_VALUE=$(cat k8s-manifests/root_token.txt | tr -d '\n')kubectl -n external-secrets delete secret vault-token --ignore-not-foundkubectl -n external-secrets create secret generic vault-token \  --from-literal=token="$VAULT_TOKEN_VALUE"# Build umbrella chart dependenciescd helmhelm dependency update student-stackcd ..# Install *your own* Helm stackhelm upgrade --install student-stack ./helm/student-stack \  -n student-api --create-namespace
+Then add DB creds into Vault and test as before.
+These steps are “helm init” in modern Helm terms: you created your own charts with helm create, wired them, and now deploy everything with helm upgrade --install only.
+pls update files what is required
+
+/home/bhakare/Documents/SRE_Bootcamp3
+values.yaml
++2
+-2
+  # This sets the pull policy for images.  #pullPolicy: IfNotPresent  # Overrides the image tag whose default is the chart appVersion.
+  #pullPolicy: IfNotPresent  # This sets the pull policy for images.  pullPolicy: IfNotPresent  # Overrides the image tag whose default is the chart appVersion.
+deployment.yaml
++15
+-1
+      {{- end }}
+      {{- end }}      initContainers:        - name: migrate-db          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"          command: ["python", "-m", "app.migrate"]          envFrom:
+configmap.yaml
++12
+apiVersion: v1kind: ConfigMapmetadata:  name: api-config  labels:
+values.yaml
++5
+-5
+image:  repository: nginx  # This sets the pull policy for images.  # Overrides the image tag whose default is the chart appVersion.
+  repository: nginximage:  repository: postgres  # This sets the pull policy for images.  # Overrides the image tag whose default is the chart appVersion.
+deployment.yaml
++17
+-9
+          ports:            - name: http              containerPort: {{ .Values.service.port }}              protocol: TCP          {{- with .Values.livenessProbe }}
+            - name: http          {{- with .Values.livenessProbe }}          livenessProbe:            {{- toYaml . | nindent 12 }}          {{- end }}          {{- with .Values.readinessProbe }}          readinessProbe:            {{- toYaml . | nindent 12 }}          {{- end }}          ports:            - name: postgres              containerPort: {{ .Values.service.port }}              protocol: TCP
+configmap.yaml
++10
+apiVersion: v1kind: ConfigMapmetadata:  name: db-config  labels:
+service.yaml
++2
+-2
+    - port: {{ .Values.service.port }}      targetPort: http      protocol: TCP      name: http
+      targetPort: http      name: http    - port: {{ .Values.service.port }}      targetPort: {{ .Values.service.port }}      protocol: TCP      name: postgres
+I’ve updated your Helm charts so they actually match your working K8s manifests:
+helm/student-api now:
+Uses image dipakrasal2009/sre_bootcamp-api1:v27 with pullPolicy: IfNotPresent.
+Exposes service NodePort on port 80 → containerPort 5050 (from values.yaml).
+Adds a ConfigMap template configmap.yaml (api-config with DB host/port/name).
+Adds an initContainer migrate-db and envFrom (db-credentials Secret + api-config ConfigMap) in deployment.yaml, mirroring application.yml.
+Sets nodeSelector.type: application by default.
+helm/student-db now:
+Uses image postgres:15, service port 5432, and nodeSelector.type: dependent_services in values.yaml.
+deployment.yaml sets containerPort: 5432 and reads:
+POSTGRES_USER / POSTGRES_PASSWORD from db-credentials Secret.
+POSTGRES_DB from db-config ConfigMap.
+Adds configmap.yaml for db-config (POSTGRES_DB=studentdb).
+Fixes service.yaml to expose port 5432 with name postgres.
+Next, you can helm install these charts directly, e.g.:
+cd /home/bhakare/Documents/SRE_Bootcamp3# DBhelm upgrade --install student-db ./helm/student-db -n student-api --create-namespace# APIhelm upgrade --install student-api ./helm/student-api -n student-api
+

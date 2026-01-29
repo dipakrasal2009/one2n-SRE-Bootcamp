@@ -19,6 +19,39 @@ source venv/bin/activate
 pip install -r requirements.txt
 python run.py
 
+---
+
+## Kubernetes Deployment (student-api)
+
+All manifests are under `k8s-manifests/`:
+
+- Application (namespace, ConfigMap, Deployment with initContainer, Service): `k8s-manifests/final/application.yml`
+- Database (namespace, ConfigMap, Deployment, Service): `k8s-manifests/final/database.yml`
+- External Secrets Operator: `k8s-manifests/external-secrets/eso.yml`
+- Vault (secret store backend): `k8s-manifests/vault/vault.yml`, `k8s-manifests/vault/vault-backend.yaml`
+- Vault-backed secret store + ExternalSecret for DB credentials:
+  - `k8s-manifests/final/cluster-vault-secretstore.yml`
+  - `k8s-manifests/final/cluster-external-secret-db.yml`
+
+### Steps
+
+1. Label nodes (example):
+   - `kubectl label node <app-node> type=application`
+   - `kubectl label node <db-node> type=dependent_services`
+2. Deploy Vault and ESO:
+   - `kubectl apply -f k8s-manifests/vault/vault.yml`
+   - `kubectl apply -f k8s-manifests/vault/vault-backend.yaml`
+   - `kubectl apply -f k8s-manifests/external-secrets/eso.yml`
+3. Configure Vault with a `db-credentials` secret (username/password) under the `secret/` path.
+4. Deploy SecretStore and ExternalSecret:
+   - `kubectl apply -f k8s-manifests/final/cluster-vault-secretstore.yml`
+   - `kubectl apply -f k8s-manifests/final/cluster-external-secret-db.yml`
+5. Deploy database and API:
+   - `kubectl apply -f k8s-manifests/final/database.yml`
+   - `kubectl apply -f k8s-manifests/final/application.yml`
+6. Test the API (NodePort service `student-api` on port 80):
+   - `curl http://<node-ip>:<nodePort>/api/v1/student`
+
 
 
 ---

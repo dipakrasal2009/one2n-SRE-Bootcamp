@@ -5,7 +5,8 @@ from flask import Flask, jsonify
 from flask_migrate import Migrate
 from .database import db
 from .routes import student_bp
-
+from .models import Student  # <-- REQUIRED
+                          
 load_dotenv()  # read .env
 
 def create_app():

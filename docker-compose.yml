@@ -20,8 +20,6 @@ services:
 
   api1:
     image: dipakrasal2009/sre_bootcamp3-api1
-    ports:
-    - "5001:5000"
     container_name: api1
     environment:
       DB_HOST: db
@@ -35,8 +33,6 @@ services:
 
   api2:
     image: dipakrasal2009/sre_bootcamp3-api2
-    ports:
-    - "5002:5000"
     container_name: api2
     environment:
       DB_HOST: db

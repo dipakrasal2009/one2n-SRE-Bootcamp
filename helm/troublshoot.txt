@@ -1,0 +1,215 @@
+✅ 1. COMPLETE TROUBLESHOOTING STEPS (What you debugged)
+🔹 1. Pod stuck in CreateContainerConfigError
+
+Root cause: Kubernetes Secret db-credentials missing
+
+Fix:
+
+kubectl create secret generic db-credentials \
+  -n student-api \
+  --from-literal=username=user \
+  --from-literal=password=password
+
+🔹 2. Vault secret existed but not in Kubernetes
+
+Vault KV was populated but ExternalSecret was not created
+
+Temporary fix used:
+
+Manual Kubernetes secret creation
+
+Lesson:
+
+Vault ≠ Kubernetes Secret unless synced via ExternalSecrets
+
+🔹 3. Init:CrashLoopBackOff for migrate-db
+
+Root causes:
+
+Wrong DB hostname (postgres)
+
+DB not ready when migration ran
+
+Fixes:
+
+Correct hostname → K8s service name
+
+student-db
+
+
+Add wait-for-db initContainer using pg_isready
+
+🔹 4. DNS Resolution Error
+could not translate host name "postgres"
+
+
+Root cause:
+
+App config used Docker-style hostname
+
+Fix:
+
+Updated api-config ConfigMap:
+
+DB_HOST=student-db
+
+🔹 5. Image Pull & Init sequencing verified
+
+Ensured:
+
+DB pod Running
+
+DB Service exists
+
+InitContainers execute in correct order
+
+🔹 6. Application kept restarting (CrashLoopBackOff)
+
+Root cause:
+
+Liveness & Readiness probes hitting /
+
+App returned 404
+
+Fix:
+
+Changed probes to real endpoint:
+
+/healthcheck
+
+🔹 7. Wrong container port
+
+Root cause:
+
+App running on 5000
+
+Probes/service pointing to 5050
+
+Fix:
+
+Unified port = 5000
+
+Updated:
+
+Deployment
+
+Probes
+
+Service
+
+🔹 8. Final Verification
+
+Init containers:
+
+wait-for-db → ✅
+
+migrate-db → ✅
+
+App container:
+
+Gunicorn running
+
+Probes passing
+
+Pod state:
+
+READY 1/1
+STATUS Running
+
+✅ 2. ONE-GO COMMANDS TO DEPLOY EVERYTHING (HELM)
+
+Run these from repo root (one2n-SRE-Bootcamp/helm)
+
+🔹 STEP 1: Create namespaces
+kubectl create namespace vault --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace external-secrets --dry-run=client -o yaml | kubectl apply -f -
+kubectl create namespace student-api --dry-run=client -o yaml | kubectl apply -f -
+
+🔹 STEP 2: Deploy External Secrets (if used)
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo update
+
+helm upgrade --install external-secrets external-secrets/external-secrets \
+  -n external-secrets
+
+🔹 STEP 3: Deploy Vault
+helm upgrade --install vault ./vault -n vault
+
+
+(Optional verification)
+
+kubectl get pods -n vault
+
+🔹 STEP 4: Create DB credentials (if NOT using ExternalSecrets)
+kubectl create secret generic db-credentials \
+  -n student-api \
+  --from-literal=username=user \
+  --from-literal=password=password
+
+🔹 STEP 5: Deploy PostgreSQL (student-db)
+helm upgrade --install student-db ./student-db -n student-api
+
+
+Verify:
+
+kubectl get pods -n student-api
+kubectl get svc -n student-api
+
+🔹 STEP 6: Deploy API application
+helm upgrade --install student-api ./student-api -n student-api
+
+🔹 STEP 7: Restart pods (safe final sync)
+kubectl delete pod -n student-api -l app.kubernetes.io/name=student-api
+
+🔹 STEP 8: Verify everything
+kubectl get pods -n student-api -w
+
+
+Expected:
+
+student-db      1/1 Running
+student-api     1/1 Running
+student-stack   1/1 Running
+
+🔹 STEP 9: Access application
+kubectl get svc -n student-api
+
+
+Then:
+
+curl http://<NODE-IP>:<NODE-PORT>/healthcheck
+
+
+Expected:
+
+{"status":"ok"}
+
+🏆 FINAL NOTE (Important)
+
+What you just did covers real interview & production scenarios:
+
+Helm debugging
+
+InitContainers
+
+DB migrations
+
+Probes
+
+DNS & Services
+
+Vault vs K8s secrets
+
+CrashLoopBackOff root cause analysis
+
+💯 This is NOT beginner-level Kubernetes.
+
+If you want next:
+
+Convert DB secret to ExternalSecret (Vault → K8s)
+
+Add startupProbe
+
+Helm lint + CI
+
+Draw architecture diagram for intervie

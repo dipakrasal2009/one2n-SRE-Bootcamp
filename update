@@ -1,0 +1,6 @@
+Pod stuck in ContainerCreating
+check pod events
+verify secrets
+checked the patch .sh 
+conflict of secrets file and mount
+
