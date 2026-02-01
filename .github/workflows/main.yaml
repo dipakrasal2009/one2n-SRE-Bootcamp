@@ -45,7 +45,7 @@ jobs:
       # - name: Code Linting
       #   run: make lint
 
-      # ✅ REQUIRED for cache support
+      # ✅ REQUIRED for Buildx + cache support
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -68,15 +68,10 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          # file: ./Dockerfile   # uncomment if Dockerfile is not in root
+          # file: ./Dockerfile   # uncomment if Dockerfile is not in repo root
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.COMMIT_SHA }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
